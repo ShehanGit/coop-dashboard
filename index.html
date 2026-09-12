@@ -1,136 +1,114 @@
-<!DOCTYPE html><html lang="en"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Coop Remote — Shehan</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Coop — Remote</title>
+<!--
+  COOP REMOTE DASHBOARD (v6.0)
+  =============================
+  Standalone page — open it from anywhere with internet, no local WiFi
+  needed. Talks to your HiveMQ Cloud broker over MQTT-over-WebSockets,
+  same credentials already in the ESP32 sketch.
+
+  Keep this file private (same reasoning as the .ino) since it embeds
+  your MQTT broker credentials in plain text.
+
+  Matches coop_v6.ino:
+    - 6 feeders, 3 feed times each, independently configurable.
+    - "Mix Feed": select any combination of feeders and fire them all
+      at the same instant (feedgroup:i,j,k command).
+    - Indoor light: time schedule + independent low-light auto-on.
+    - Outdoor light: time schedule only (PIR security light unaffected).
+    - No door / no HX711 scale (removed per your earlier choice).
+
+  Limitation vs the ESP32's own local dashboard: the Log tab here only
+  shows lines received while this page is open and connected — no
+  history before that.
+-->
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#0a0c0f;--s1:#111318;--s2:#181c23;--br:#252a35;--br2:#2e3545;
-  --tx:#d4cfc8;--tx2:#7a8394;--tx3:#4a5060;
-  --gr:#2dba5c;--grd:#1a4a2e;--re:#f04e4e;--red:#4a1a1a;
-  --am:#e8a932;--amd:#4a3200;--bl:#3d9bff;--bld:#0d2044;--pu:#9b6dff;
-}
-body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--tx);font-size:14px;min-height:100vh}
-header{background:var(--s1);border-bottom:1px solid var(--br);padding:11px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
-.logo{font-family:monospace;font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px}
-.pulse{width:8px;height:8px;border-radius:50%;animation:pulse 2s infinite}
-.pulse.online{background:var(--gr);box-shadow:0 0 8px var(--gr)}
-.pulse.offline{background:var(--re);box-shadow:0 0 8px var(--re)}
-.pulse.connecting{background:var(--am);box-shadow:0 0 8px var(--am)}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-#status-text{font-size:11px;color:var(--tx2);font-family:monospace}
-#clock{font-family:monospace;font-size:12px;color:var(--tx2)}
-.online-badge{display:flex;align-items:center;gap:6px}
-/* Online indicator card */
-.esp-status{background:var(--s1);border:1px solid var(--br);border-radius:10px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;margin:12px 14px;gap:10px}
-.esp-status .label{font-size:11px;color:var(--tx2);text-transform:uppercase;letter-spacing:.6px}
-.esp-status .value{font-family:monospace;font-size:13px;font-weight:700}
-.esp-ind{display:flex;align-items:center;gap:8px}
-.esp-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
-.esp-dot.on{background:var(--gr);box-shadow:0 0 10px var(--gr);animation:pulse 2s infinite}
-.esp-dot.off{background:var(--re)}
-.esp-dot.wait{background:var(--am);animation:pulse 1s infinite}
-/* Alert bar */
-.alert-bar{margin:0 14px 10px;background:#3d2800;border:1px solid #9a5800;border-radius:8px;padding:8px 12px;font-size:12px;color:var(--am);display:none}
-/* Tabs */
-main{padding:12px 14px;max-width:740px;margin:0 auto}
-.tabs{display:flex;gap:2px;background:var(--s1);border:1px solid var(--br);border-radius:10px;padding:3px;margin-bottom:14px}
-.tab{flex:1;padding:7px 4px;cursor:pointer;font-size:11px;font-weight:700;color:var(--tx2);border-radius:7px;text-align:center;transition:.15s;letter-spacing:.4px;text-transform:uppercase}
-.tab.active{background:var(--s2);color:var(--tx);box-shadow:0 1px 4px rgba(0,0,0,.5)}
+body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;font-size:14px}
+header{background:#161b22;border-bottom:1px solid #30363d;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
+header h1{font-size:14px;font-weight:700;font-family:monospace}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;animation:blink 2s infinite}
+.dot.on{background:#3fb950;box-shadow:0 0 6px #3fb950}.dot.off{background:#f85149}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+#htime{font-family:monospace;font-size:12px;color:#8b949e}
+.tabs{display:flex;background:#161b22;border-bottom:1px solid #30363d;overflow-x:auto}
+.tab{padding:9px 14px;cursor:pointer;font-size:12px;font-weight:600;color:#8b949e;border-bottom:2px solid transparent;white-space:nowrap;text-transform:uppercase;letter-spacing:.4px}
+.tab.active{color:#58a6ff;border-bottom-color:#58a6ff}
 .tc{display:none}.tc.active{display:block}
-/* Sections */
+main{padding:12px;max-width:780px;margin:0 auto}
 .sec{margin-bottom:14px}
-.st{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--tx3);margin-bottom:7px;padding-bottom:4px;border-bottom:1px solid var(--br)}
-.sh{font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--tx2);margin:10px 0 5px;border-left:2px solid var(--bl);padding-left:7px}
-/* Cards */
+.st{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#484f58;margin-bottom:7px;padding-bottom:4px;border-bottom:1px solid #21262d}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:7px}
-.card{background:var(--s1);border:1px solid var(--br);border-radius:10px;padding:11px}
-.cl{font-size:10px;color:var(--tx2);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:11px}
+.cl{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
 .cv{font-family:monospace;font-size:22px;font-weight:700;line-height:1}
-.cu{font-size:11px;color:var(--tx2);margin-left:2px}
-.bar{height:4px;background:var(--br2);border-radius:3px;margin-top:6px;overflow:hidden}
+.cu{font-size:11px;color:#8b949e;margin-left:2px}
+.bar{height:4px;background:#21262d;border-radius:3px;margin-top:6px;overflow:hidden}
 .bf{height:100%;border-radius:3px;transition:width .5s}
-.bdg{display:inline-block;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-top:5px}
-.bgr{background:var(--grd);color:var(--gr)}.bre{background:var(--red);color:var(--re)}
-.bam{background:var(--amd);color:var(--am)}.bof{background:var(--s2);color:var(--tx3)}
-.bbl{background:var(--bld);color:var(--bl)}
-/* Relay buttons */
-.rg{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.bdg{display:inline-block;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;margin-top:5px}
+.g{background:#1a4a2e;color:#3fb950}.r{background:#4a1a1a;color:#f85149}
+.am{background:#3d2800;color:#e3b341}.of{background:#21262d;color:#484f58}.bl{background:#0d2044;color:#58a6ff}
+.rb{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:10px 6px;text-align:center;cursor:pointer;transition:.15s;user-select:none}
+.rb:hover{border-color:#58a6ff}.rb.on{background:#1a4a2e;border-color:#3fb950}
+.rb.disabled{opacity:.35;cursor:not-allowed;pointer-events:none}
+.ri{font-size:20px;margin-bottom:3px}.rl{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.3px}
+.rb.on .rl{color:#3fb950}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:7px}
 .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px}
-.rb{background:var(--s1);border:1px solid var(--br);border-radius:10px;padding:10px 6px;text-align:center;cursor:pointer;transition:.15s;user-select:none}
-.rb:hover{border-color:var(--br2)}.rb.on{background:var(--grd);border-color:var(--gr)}
-.ri{font-size:20px;margin-bottom:3px}.rl{font-size:10px;color:var(--tx2);text-transform:uppercase;letter-spacing:.3px}
-.rb.on .rl{color:var(--gr)}
-.btn{background:var(--s1);border:1px solid var(--br);border-radius:7px;padding:9px 12px;color:var(--tx);font-size:12px;font-weight:700;cursor:pointer;text-align:center;transition:.15s;width:100%;margin-bottom:6px}
-.btn:hover{background:var(--s2)}
-.btn.p{background:var(--bld);border-color:#388bfd;color:var(--bl)}
-.btn.gr{background:var(--grd);border-color:#2ea043;color:var(--gr)}
-.btn.rd{background:var(--red);border-color:#8b2020;color:var(--re)}
-.btn.am{background:var(--amd);border-color:#9a5800;color:var(--am)}
-/* Security mode */
-.sm{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
-.smb{background:var(--s1);border:1px solid var(--br);border-radius:7px;padding:8px 4px;text-align:center;cursor:pointer;font-size:11px;font-weight:700;color:var(--tx2);transition:.15s}
-.smb.a0{background:var(--red);border-color:var(--re);color:var(--re)}
-.smb.a1{background:var(--amd);border-color:var(--am);color:var(--am)}
-.smb.a2{background:var(--grd);border-color:var(--gr);color:var(--gr)}
-/* Settings form */
+.btn{background:#161b22;border:1px solid #30363d;border-radius:7px;padding:9px 12px;color:#e6edf3;font-size:12px;font-weight:600;cursor:pointer;text-align:center;transition:.15s}
+.btn:hover{background:#21262d}
+.btn.disabled{opacity:.35;cursor:not-allowed;pointer-events:none}
+.btn.p{background:#0d2044;border-color:#388bfd;color:#58a6ff}
+.btn.am{background:#3d2800;border-color:#9a5800;color:#e3b341}
+.btn.gr{background:#1a4a2e;border-color:#2ea043;color:#3fb950}
+.sm{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:7px}
+.smb{background:#161b22;border:1px solid #30363d;border-radius:7px;padding:8px 4px;text-align:center;cursor:pointer;font-size:11px;font-weight:700;color:#8b949e;transition:.15s}
+.smb:hover{background:#21262d}
+.smb.a0{background:#4a1a1a;border-color:#f85149;color:#f85149}
+.smb.a1{background:#3d2800;border-color:#e3b341;color:#e3b341}
+.smb.a2{background:#1a4a2e;border-color:#3fb950;color:#3fb950}
 .ig{display:flex;flex-direction:column;gap:3px}
-.ig label{font-size:10px;color:var(--tx2);text-transform:uppercase;letter-spacing:.4px;font-family:monospace}
-.ig input,.ig select{background:var(--bg);border:1px solid var(--br);border-radius:6px;padding:7px 9px;color:var(--tx);font-size:13px;font-family:monospace;width:100%;transition:border .15s}
-.ig input:focus,.ig select:focus{outline:none;border-color:var(--bl)}
-.sb{width:100%;background:#238636;border:1px solid #2ea043;border-radius:7px;padding:11px;color:#fff;font-weight:700;font-size:13px;cursor:pointer;margin-top:10px}
+.ig label{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.3px;font-family:monospace}
+.ig input,.ig select{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:6px 8px;color:#e6edf3;font-size:13px;font-family:monospace;width:100%}
+.ig input:focus,.ig select:focus{outline:none;border-color:#58a6ff}
+.sb{width:100%;background:#238636;border:1px solid #2ea043;border-radius:7px;padding:10px;color:#fff;font-weight:700;font-size:13px;cursor:pointer;margin-top:10px}
 .sb:hover{background:#2ea043}
-.smsg{text-align:center;margin-top:7px;font-size:11px;color:var(--gr);font-family:monospace;display:none}
-/* Log */
-.lb{background:var(--bg);border:1px solid var(--br);border-radius:7px;padding:10px;font-family:monospace;font-size:11px;line-height:1.8;height:220px;overflow-y:auto;color:var(--tx2);white-space:pre-wrap}
-/* Canvas */
-.cv-wrap{background:var(--bg);border:1px solid var(--br);border-radius:7px;padding:10px;text-align:center;margin-top:7px}
-/* Offline overlay */
-.offline-overlay{position:fixed;inset:0;background:rgba(10,12,15,.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;display:none}
-.offline-overlay.show{display:flex}
-.offline-box{background:var(--s1);border:1px solid var(--br);border-radius:14px;padding:30px;text-align:center;max-width:300px}
-.offline-box .big{font-size:48px;margin-bottom:14px}
-.offline-box h2{font-size:16px;font-weight:700;margin-bottom:8px;color:var(--re)}
-.offline-box p{font-size:12px;color:var(--tx2);line-height:1.6}
+.sm2{margin-top:6px;font-size:11px;color:#3fb950;font-family:monospace;display:none;text-align:center}
+.lb{background:#0d1117;border:1px solid #30363d;border-radius:7px;padding:10px;font-family:monospace;font-size:11px;line-height:1.8;height:200px;overflow-y:auto;color:#8b949e;white-space:pre-wrap;display:flex;flex-direction:column-reverse}
+.sh{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#8b949e;margin:10px 0 5px;border-left:2px solid #58a6ff;padding-left:7px}
+.alert-bar{background:#3d2800;border:1px solid #9a5800;border-radius:7px;padding:8px 12px;font-size:12px;color:#e3b341;margin-bottom:10px;display:none}
+.notice{background:#0d2044;border:1px solid #388bfd;border-radius:7px;padding:8px 12px;font-size:11px;color:#8b949e;margin-bottom:10px}
+.swrow{display:flex;align-items:center;justify-content:space-between;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:9px 12px;margin-bottom:6px}
+.swrow .swl{font-size:12px;font-weight:600}
+.swrow .swd{font-size:10px;color:#8b949e}
+.sw{position:relative;width:40px;height:22px;flex-shrink:0}
+.sw input{opacity:0;width:0;height:0}
+.sw .slider{position:absolute;inset:0;background:#30363d;border-radius:22px;cursor:pointer;transition:.15s}
+.sw .slider:before{content:"";position:absolute;width:16px;height:16px;left:3px;top:3px;background:#8b949e;border-radius:50%;transition:.15s}
+.sw input:checked+.slider{background:#1a4a2e}
+.sw input:checked+.slider:before{transform:translateX(18px);background:#3fb950}
+.fcard{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:10px;margin-bottom:8px}
+.fcard .fh{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.fcard .fh b{font-size:12px}
+.tsrow{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:6px}
+.tsrow .tslot{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:6px}
+.tslabel{font-size:9px;color:#484f58;text-transform:uppercase;margin-bottom:3px;text-align:center}
+.frow{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:6px}
+.frow2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.mixgrid{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:8px}
+.mixchk{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:8px 4px;text-align:center;cursor:pointer;font-size:11px;font-weight:700;color:#8b949e}
+.mixchk.on{background:#1a4a2e;border-color:#3fb950;color:#3fb950}
 </style></head><body>
-
-<div class="offline-overlay" id="ov">
-  <div class="offline-box">
-    <div class="big">🔴</div>
-    <h2>ESP32 Offline</h2>
-    <p>The coop controller hasn't sent data in over 30 seconds.<br><br>Check power and WiFi at the coop.</p>
-  </div>
-</div>
-
 <header>
-  <div class="logo">
-    <div class="pulse connecting" id="mqtt-dot"></div>
-    COOP REMOTE
-  </div>
-  <div class="online-badge">
-    <span id="status-text">Connecting...</span>
-    <span id="clock">--:--:--</span>
-  </div>
+  <h1><span class="dot off" id="dot"></span>COOP · REMOTE</h1>
+  <span id="htime">--:--:--</span>
 </header>
-
-<div class="esp-status" id="esp-status-bar">
-  <div class="esp-ind">
-    <div class="esp-dot wait" id="esp-dot"></div>
-    <div>
-      <div class="label">ESP32 Controller</div>
-      <div class="value" id="esp-status-txt">Waiting for data...</div>
-    </div>
-  </div>
-  <div style="text-align:right">
-    <div class="label">Last seen</div>
-    <div class="value" id="last-seen">--</div>
-  </div>
-</div>
-
-<div class="alert-bar" id="alert-bar"></div>
-
-<main>
+<div id="alert-bar" class="alert-bar"></div>
 <div class="tabs">
   <div class="tab active" onclick="T('monitor')">Monitor</div>
   <div class="tab" onclick="T('control')">Control</div>
@@ -141,337 +119,331 @@ main{padding:12px 14px;max-width:740px;margin:0 auto}
 </div>
 
 <!-- MONITOR -->
-<div class="tc active" id="tab-monitor">
+<div class="tc active" id="tab-monitor"><main>
+<div class="notice">Connected over the internet via MQTT (HiveMQ Cloud) — works from anywhere.</div>
 <div class="sec"><div class="st">Environment</div>
 <div class="cards">
-  <div class="card"><div class="cl">Temp</div><div><span class="cv" id="vT">--</span><span class="cu">°C</span></div><div id="bT" class="bdg bof">--</div></div>
-  <div class="card"><div class="cl">Humidity</div><div><span class="cv" id="vH">--</span><span class="cu">%</span></div><div class="bar"><div class="bf" id="brH" style="background:var(--bl);width:0%"></div></div></div>
-  <div class="card"><div class="cl">Light LDR</div><div><span class="cv" id="vL" style="font-size:17px">--</span></div><div class="bar"><div class="bf" id="brL" style="background:var(--am);width:0%"></div></div></div>
+  <div class="card"><div class="cl">Temp</div><div><span class="cv" id="vT">--</span><span class="cu">°C</span></div><div id="bT" class="bdg of">--</div></div>
+  <div class="card"><div class="cl">Humidity</div><div><span class="cv" id="vH">--</span><span class="cu">%</span></div><div class="bar"><div class="bf" id="brH" style="background:#58a6ff;width:0%"></div></div></div>
+  <div class="card"><div class="cl">Light LDR</div><div><span class="cv" id="vL" style="font-size:17px">--</span></div><div class="bar"><div class="bf" id="brL" style="background:#e3b341;width:0%"></div></div></div>
 </div></div>
 <div class="sec"><div class="st">Resources</div>
 <div class="cards">
-  <div class="card"><div class="cl">Water</div><div><span class="cv" id="vW">--</span><span class="cu">%</span></div><div class="bar"><div class="bf" id="brW" style="background:var(--gr);width:0%"></div></div></div>
-  <div class="card"><div class="cl">Feed Level</div><div><span class="cv" id="vFP">--</span><span class="cu">%</span></div><div class="bar"><div class="bf" id="brF" style="background:var(--am);width:0%"></div></div></div>
-  <div class="card"><div class="cl">Feed Weight</div><div><span class="cv" id="vFG">--</span><span class="cu">g</span></div></div>
+  <div class="card"><div class="cl">Water</div><div><span class="cv" id="vW">--</span><span class="cu">%</span></div><div class="bar"><div class="bf" id="brW" style="background:#3fb950;width:0%"></div></div></div>
+  <div class="card"><div class="cl">Feed Level</div><div><span class="cv" id="vFP">--</span><span class="cu">%</span></div><div class="bar"><div class="bf" id="brF" style="background:#e3b341;width:0%"></div></div></div>
 </div></div>
 <div class="sec"><div class="st">Status</div>
 <div class="cards">
-  <div class="card" style="padding:9px"><div class="cl">Door</div><div id="dico" style="font-size:22px;margin:3px 0">--</div><div id="bDoor" class="bdg bof">--</div></div>
-  <div class="card" style="padding:9px"><div class="cl">Indoor Light</div><div id="bLI" class="bdg bof">OFF</div></div>
-  <div class="card" style="padding:9px"><div class="cl">Outdoor Light</div><div id="bLO" class="bdg bof">OFF</div></div>
-  <div class="card" style="padding:9px"><div class="cl">Fan</div><div id="bFan" class="bdg bof">OFF</div></div>
-  <div class="card" style="padding:9px"><div class="cl">Heater</div><div id="bHeat" class="bdg bof">OFF</div></div>
-  <div class="card" style="padding:9px"><div class="cl">Pump</div><div id="bPump" class="bdg bof">OFF</div></div>
-  <div class="card" style="padding:9px"><div class="cl">Security</div><div id="bSec" class="bdg bof">--</div></div>
-  <div class="card" style="padding:9px"><div class="cl">PIR</div><div id="bPIR" class="bdg bgr">CLEAR</div></div>
+  <div class="card" style="padding:9px"><div class="cl">Indoor Light</div><div id="bLI" class="bdg of">OFF</div></div>
+  <div class="card" style="padding:9px"><div class="cl">Outdoor Light</div><div id="bLO" class="bdg of">OFF</div></div>
+  <div class="card" style="padding:9px"><div class="cl">Fan</div><div id="bFan" class="bdg of">OFF</div></div>
+  <div class="card" style="padding:9px"><div class="cl">Heater</div><div id="bHeat" class="bdg of">OFF</div></div>
+  <div class="card" style="padding:9px"><div class="cl">Pump</div><div id="bPump" class="bdg of">OFF</div></div>
+  <div class="card" style="padding:9px"><div class="cl">Security</div><div id="bSec" class="bdg of">--</div></div>
+  <div class="card" style="padding:9px"><div class="cl">PIR</div><div id="bPIR" class="bdg of">CLEAR</div></div>
 </div></div>
-</div>
+</main></div>
 
 <!-- CONTROL -->
-<div class="tc" id="tab-control">
+<div class="tc" id="tab-control"><main>
 <div class="sec"><div class="st">Lights</div>
 <div class="g2">
-  <div class="rb" id="rb-li" onclick="pub('lightIn')"><div class="ri">💡</div><div class="rl">Indoor</div></div>
-  <div class="rb" id="rb-lo" onclick="pub('lightOut')"><div class="ri">🔦</div><div class="rl">Outdoor</div></div>
+  <div class="rb" id="rb-li" onclick="cmd('lightIn')"><div class="ri">💡</div><div class="rl">Indoor</div></div>
+  <div class="rb" id="rb-lo" onclick="cmd('lightOut')"><div class="ri">🔦</div><div class="rl">Outdoor</div></div>
 </div></div>
 <div class="sec"><div class="st">Climate</div>
 <div class="g3">
-  <div class="rb" id="rb-fan" onclick="pub('fan')"><div class="ri">🌀</div><div class="rl">Fan</div></div>
-  <div class="rb" id="rb-heat" onclick="pub('heat')"><div class="ri">🔥</div><div class="rl">Heater</div></div>
-  <div class="rb" id="rb-pump" onclick="pub('pump')"><div class="ri">💧</div><div class="rl">Pump</div></div>
+  <div class="rb" id="rb-fan" onclick="cmd('fan')"><div class="ri">🌀</div><div class="rl">Fan</div></div>
+  <div class="rb" id="rb-heat" onclick="cmd('heat')"><div class="ri">🔥</div><div class="rl">Heater</div></div>
+  <div class="rb" id="rb-pump" onclick="cmd('pump')"><div class="ri">💧</div><div class="rl">Pump</div></div>
 </div></div>
-<div class="sec"><div class="st">Door</div>
-<div class="g2">
-  <div class="btn gr" onclick="pub('dooropen')">⬆ Open Door</div>
-  <div class="btn rd" onclick="pub('doorclose')">⬇ Close Door</div>
-</div></div>
-<div class="sec"><div class="st">Feeder & Tests</div>
-<div class="btn p" onclick="pub('feednow')">🐔 Feed Now</div>
-<div class="btn am" onclick="pub('buzz')">🔔 Test Buzzer</div>
+<div class="sec"><div class="st">Feed Now (per feeder)</div>
+<div id="feedNowGrid" class="g3"></div>
+</div>
+<div class="sec"><div class="st">Mix Feed — fires selected feeders at the same instant</div>
+<div class="mixgrid" id="mixGrid"></div>
+<div class="btn gr" onclick="feedMix()">🥣 Feed Selected Together</div>
+</div>
+<div class="sec"><div class="st">Alerts</div>
+<div class="btn am" onclick="cmd('buzz')">🔔 Test Buzzer</div>
 </div>
 <div class="sec"><div class="st">Security Mode</div>
 <div class="sm">
-  <div class="smb" id="sm0" onclick="pub('sec0')">🔕 OFF</div>
-  <div class="smb" id="sm1" onclick="pub('sec1')">🌙 Night</div>
-  <div class="smb" id="sm2" onclick="pub('sec2')">🚨 Always</div>
+  <div class="smb" id="sm0" onclick="cmd('sec0')">🔕 OFF</div>
+  <div class="smb" id="sm1" onclick="cmd('sec1')">🌙 Night</div>
+  <div class="smb" id="sm2" onclick="cmd('sec2')">🚨 Always</div>
 </div></div>
-</div>
+</main></div>
 
 <!-- LIGHTS -->
-<div class="tc" id="tab-lights">
+<div class="tc" id="tab-lights"><main>
 <div class="sec">
 <div class="sh">Indoor light schedule</div>
 <div class="g2">
-  <div class="ig"><label>ON (h / m)</label><div class="g2"><input type="number" id="liOnH" min="0" max="23"><input type="number" id="liOnM" min="0" max="59"></div></div>
-  <div class="ig"><label>OFF (h / m)</label><div class="g2"><input type="number" id="liOfH" min="0" max="23"><input type="number" id="liOfM" min="0" max="59"></div></div>
+  <div class="ig"><label>ON time (h / m)</label><div class="g2"><input type="number" id="liOnH" min="0" max="23" placeholder="H"><input type="number" id="liOnM" min="0" max="59" placeholder="M"></div></div>
+  <div class="ig"><label>OFF time (h / m)</label><div class="g2"><input type="number" id="liOfH" min="0" max="23" placeholder="H"><input type="number" id="liOfM" min="0" max="59" placeholder="M"></div></div>
 </div>
-<div id="lhrs" style="margin-top:6px;font-size:11px;font-family:monospace;color:var(--tx2)"></div>
-<div class="sh">Outdoor light schedule</div>
+<div id="lhrs" style="margin-top:6px;font-size:11px;color:#8b949e;font-family:monospace"></div>
+<div class="sh">Indoor light — low-light auto-on (any time of day, on top of the schedule above)</div>
 <div class="g2">
-  <div class="ig"><label>ON (h / m)</label><div class="g2"><input type="number" id="loOnH" min="0" max="23"><input type="number" id="loOnM" min="0" max="59"></div></div>
-  <div class="ig"><label>OFF (h / m)</label><div class="g2"><input type="number" id="loOfH" min="0" max="23"><input type="number" id="loOfM" min="0" max="59"></div></div>
+  <div class="ig"><label>Enable</label><select id="ildr"><option value="1">Yes</option><option value="0">No</option></select></div>
+  <div class="ig"><label>Turn on when LDR below</label><input type="number" id="ldrII" min="100" max="4095"></div>
 </div>
-<div class="sh">LDR auto-on (outdoor)</div>
+<div class="sh">Outdoor light schedule (time only — no light-sensor auto-on)</div>
 <div class="g2">
-  <div class="ig"><label>Enable</label><select id="oldr"><option value="1">Yes</option><option value="0">No</option></select></div>
-  <div class="ig"><label>Turn on when LDR below</label><input type="number" id="ldrOO" min="100" max="4095"></div>
+  <div class="ig"><label>ON time (h / m)</label><div class="g2"><input type="number" id="loOnH" min="0" max="23" placeholder="H"><input type="number" id="loOnM" min="0" max="59" placeholder="M"></div></div>
+  <div class="ig"><label>OFF time (h / m)</label><div class="g2"><input type="number" id="loOfH" min="0" max="23" placeholder="H"><input type="number" id="loOfM" min="0" max="59" placeholder="M"></div></div>
 </div>
-<div class="sh">Security</div>
+<div class="sh">Security (PIR-triggered outdoor light — independent of the schedule above)</div>
 <div class="g3">
   <div class="ig"><label>Mode</label><select id="sec"><option value="0">Off</option><option value="1">Night only</option><option value="2">Always</option></select></div>
-  <div class="ig"><label>Light on (sec)</label><input type="number" id="pSec" min="5" max="300"></div>
-  <div class="ig"><label>Buzzer</label><select id="buz"><option value="1">Yes</option><option value="0">No</option></select></div>
+  <div class="ig"><label>Light on (sec) after motion</label><input type="number" id="pSec" min="5" max="300"></div>
+  <div class="ig"><label>Buzzer on motion</label><select id="buz"><option value="1">Yes</option><option value="0">No</option></select></div>
 </div>
-<button class="sb" onclick="saveS()">💾 Save</button>
-<div class="smsg" id="sm-l">✓ Saved to ESP32!</div>
-</div></div>
+<button class="sb" onclick="saveS()">💾 Save Light & Security</button>
+<div class="sm2" id="sm-lights">✓ Saved!</div>
+</div></main></div>
 
 <!-- FEED -->
-<div class="tc" id="tab-feed">
+<div class="tc" id="tab-feed"><main>
 <div class="sec">
-<div class="sh">Dispense mode</div>
+<div class="sh">Feed alerts</div>
 <div class="g2">
-  <div class="ig"><label>Mode</label><select id="dM"><option value="0">By time (seconds)</option><option value="1">By weight (grams)</option></select></div>
-  <div class="ig"><label>Weight target (g)</label><input type="number" id="tW" min="5" max="500"></div>
+  <div class="ig"><label>Level alert below (%)</label><input type="number" id="fA" min="5" max="90"></div>
 </div>
-<div class="sh">Servo positions</div>
-<div class="g2">
-  <div class="ig"><label>Closed angle (°)</label><input type="number" id="sR" min="0" max="180" oninput="drawS()"></div>
-  <div class="ig"><label>Open angle (°)</label><input type="number" id="sO" min="0" max="180" oninput="drawS()"></div>
-</div>
-<div class="cv-wrap"><canvas id="sc" width="200" height="110"></canvas>
-<div style="font-size:10px;color:var(--tx3);margin-top:4px;font-family:monospace">Blue = closed · Green = open</div></div>
-<div class="sh">Seconds open per feed</div>
-<div class="g3">
-  <div class="ig"><label>Feed 1</label><input type="number" id="f1S" min="1" max="30"></div>
-  <div class="ig"><label>Feed 2</label><input type="number" id="f2S" min="1" max="30"></div>
-  <div class="ig"><label>Feed 3</label><input type="number" id="f3S" min="1" max="30"></div>
-</div>
-<div class="sh">Alerts</div>
-<div class="g2">
-  <div class="ig"><label>Feed level alert below (%)</label><input type="number" id="fA" min="5" max="90"></div>
-  <div class="ig"><label>Feed weight alert below (g)</label><input type="number" id="fwA" min="10" max="2000"></div>
-</div>
-<button class="sb" onclick="saveS()">💾 Save</button>
-<div class="smsg" id="sm-f">✓ Saved to ESP32!</div>
-</div></div>
+<div class="sh">Six independent feeders — 3 feed times per feeder</div>
+<div id="feederCards"></div>
+<button class="sb" onclick="saveS()">💾 Save Feed Settings</button>
+<div class="sm2" id="sm-feed">✓ Saved!</div>
+</div></main></div>
 
 <!-- SCHEDULE -->
-<div class="tc" id="tab-schedule">
+<div class="tc" id="tab-schedule"><main>
 <div class="sec">
-<div class="sh">Temperature</div>
+<div class="sh">Installed devices</div>
+<div class="swrow"><div><div class="swl">🌀 Fan</div><div class="swd">Automation & manual control ignored when off</div></div><label class="sw"><input type="checkbox" id="enFan" checked><span class="slider"></span></label></div>
+<div class="swrow"><div><div class="swl">🔥 Heater</div><div class="swd">Automation & manual control ignored when off</div></div><label class="sw"><input type="checkbox" id="enHeat" checked><span class="slider"></span></label></div>
+<div class="swrow"><div><div class="swl">💧 Pump</div><div class="swd">Automation & manual control ignored when off</div></div><label class="sw"><input type="checkbox" id="enPump" checked><span class="slider"></span></label></div>
+<div class="sh">Schedules (manual buttons always still work)</div>
+<div class="swrow"><div><div class="swl">💡 Indoor light schedule</div><div class="swd">Off = purely manual, on = auto follows time + low-light settings</div></div><label class="sw"><input type="checkbox" id="schLI" checked><span class="slider"></span></label></div>
+<div class="swrow"><div><div class="swl">🔦 Outdoor light schedule</div><div class="swd">Off = purely manual, on = auto follows its time schedule</div></div><label class="sw"><input type="checkbox" id="schLO" checked><span class="slider"></span></label></div>
+<div class="swrow"><div><div class="swl">🐔 Feeder schedule</div><div class="swd">Off = only manual/mix feed buttons work, on = scheduled feeds run</div></div><label class="sw"><input type="checkbox" id="schFeed" checked><span class="slider"></span></label></div>
+<button class="sb" onclick="saveS()">💾 Save Installed & Schedules</button>
+<div class="sm2" id="sm-devices">✓ Saved!</div>
+<div class="sh">Temperature thresholds</div>
 <div class="g2">
-  <div class="ig"><label>Fan above (°C)</label><input type="number" id="tH" min="20" max="45"></div>
-  <div class="ig"><label>Heater below (°C)</label><input type="number" id="tL" min="0" max="25"></div>
+  <div class="ig"><label>Fan ON above (°C)</label><input type="number" id="tH" min="20" max="45"></div>
+  <div class="ig"><label>Heater ON below (°C)</label><input type="number" id="tL" min="0" max="25"></div>
 </div>
 <div class="sh">Water pump</div>
 <div class="g3">
   <div class="ig"><label>Pump ON below (%)</label><input type="number" id="pOn" min="5" max="50"></div>
   <div class="ig"><label>Pump OFF above (%)</label><input type="number" id="pOf" min="20" max="100"></div>
-  <div class="ig"><label>Alert below (%)</label><input type="number" id="wA" min="5" max="50"></div>
+  <div class="ig"><label>Water alert below (%)</label><input type="number" id="wA" min="5" max="50"></div>
 </div>
-<div class="sh">Door LDR</div>
-<div class="g2">
-  <div class="ig"><label>Open above</label><input type="number" id="ldrO" min="100" max="4095"></div>
-  <div class="ig"><label>Close below</label><input type="number" id="ldrC" min="100" max="4095"></div>
-</div>
-<div class="sh">Door schedule</div>
-<div class="g2">
-  <div class="ig"><label>Open at (h / m)</label><div class="g2"><input type="number" id="doH" min="0" max="23"><input type="number" id="doM" min="0" max="59"></div></div>
-  <div class="ig"><label>Close at (h / m)</label><div class="g2"><input type="number" id="dcH" min="0" max="23"><input type="number" id="dcM" min="0" max="59"></div></div>
-</div>
-<div class="sh">Feed schedule</div>
-<div class="g3">
-  <div class="ig"><label>Feed 1 (h / m)</label><div class="g2"><input type="number" id="f1H" min="0" max="23"><input type="number" id="f1M" min="0" max="59"></div></div>
-  <div class="ig"><label>Feed 2 (h / m)</label><div class="g2"><input type="number" id="f2H" min="0" max="23"><input type="number" id="f2M" min="0" max="59"></div></div>
-  <div class="ig"><label>Feed 3 (h / m)</label><div class="g2"><input type="number" id="f3H" min="0" max="23"><input type="number" id="f3M" min="0" max="59"></div></div>
-</div>
-<button class="sb" onclick="saveS()">💾 Save</button>
-<div class="smsg" id="sm-s">✓ Saved to ESP32!</div>
-</div></div>
+<button class="sb" onclick="saveS()">💾 Save Schedule</button>
+<div class="sm2" id="sm-sched">✓ Saved!</div>
+</div></main></div>
 
 <!-- LOG -->
-<div class="tc" id="tab-log">
-<div class="sec"><div class="st">Event Log (live via MQTT)</div>
-<div class="lb" id="lb">Waiting for log messages...</div>
-</div></div>
-
-</main>
+<div class="tc" id="tab-log"><main>
+<div class="sec"><div class="st">Event Log (live, since this page connected)</div>
+<div class="lb" id="lb"></div>
+<div class="btn p" style="margin-top:7px" onclick="requestSettings()">↻ Re-request settings</div>
+</div></main></div>
 
 <script>
-// ── MQTT CONFIG ───────────────────────────────────────────
-const MQTT_HOST = 'wss://d5e17ca8a5d34df8a0dd8af31f661cce.s1.eu.hivemq.cloud:8884/mqtt';
-const MQTT_USER = 'shehan2';
-const MQTT_PASS = 'sheha@142';
-const T_SENSOR  = 'coop/sensors';
-const T_STATUS  = 'coop/status';
-const T_CMD     = 'coop/cmd';
-const T_LOG     = 'coop/log';
-const T_SETTINGS= 'coop/settings';
+const MQTT_HOST = "d5e17ca8a5d34df8a0dd8af31f661cce.s1.eu.hivemq.cloud";
+const MQTT_WSS_PORT = 8884;
+const MQTT_USER = "shehan2";
+const MQTT_PASS = "sheha@142";
+const T_SENSOR="coop/sensors", T_STATUS="coop/status", T_CMD="coop/cmd",
+      T_LOG="coop/log", T_SETTINGS="coop/settings";
 
-let client, cfg={}, lastDataMs=0, espOnline=false;
-
-function connect(){
-  const dot=document.getElementById('mqtt-dot');
-  dot.className='pulse connecting';
-  document.getElementById('status-text').textContent='Connecting...';
-
-  client = mqtt.connect(MQTT_HOST,{
-    username: MQTT_USER,
-    password: MQTT_PASS,
-    clientId: 'coop_web_'+Math.random().toString(16).substr(2,8),
-    reconnectPeriod: 5000,
-    clean: true
-  });
-
-  client.on('connect',()=>{
-    dot.className='pulse online';
-    document.getElementById('status-text').textContent='MQTT Connected';
-    client.subscribe([T_SENSOR,T_STATUS,T_LOG,T_SETTINGS]);
-  });
-  client.on('offline',()=>{ dot.className='pulse offline'; document.getElementById('status-text').textContent='MQTT Offline'; });
-  client.on('error',()=>{ dot.className='pulse offline'; });
-  client.on('message',(topic,payload)=>{
-    const msg=payload.toString();
-    if(topic===T_SENSOR){ try{onData(JSON.parse(msg));}catch(e){} }
-    if(topic===T_STATUS){ try{onStatus(JSON.parse(msg));}catch(e){} }
-    if(topic===T_LOG)   { addLog(msg); }
-    if(topic===T_SETTINGS){ try{onSettings(JSON.parse(msg));}catch(e){} }
-  });
-}
-
-// ── ESP32 ONLINE STATUS ───────────────────────────────────
-function onStatus(d){
-  const dot=document.getElementById('esp-dot');
-  const txt=document.getElementById('esp-status-txt');
-  if(d.online){
-    dot.className='esp-dot on';
-    txt.textContent='ONLINE';
-    txt.style.color='var(--gr)';
-    document.getElementById('ov').classList.remove('show');
-  } else {
-    dot.className='esp-dot off';
-    txt.textContent='OFFLINE';
-    txt.style.color='var(--re)';
-  }
-}
-
-function checkEspTimeout(){
-  const now=Date.now();
-  const dot=document.getElementById('esp-dot');
-  const txt=document.getElementById('esp-status-txt');
-  const ls=document.getElementById('last-seen');
-  if(lastDataMs>0){
-    const sec=Math.round((now-lastDataMs)/1000);
-    if(sec<60) ls.textContent=sec+'s ago';
-    else ls.textContent=Math.round(sec/60)+'m ago';
-    if(sec>30&&espOnline){
-      espOnline=false;
-      dot.className='esp-dot off';
-      txt.textContent='NO DATA ('+sec+'s)';
-      txt.style.color='var(--am)';
-      document.getElementById('ov').classList.add('show');
-    }
-  }
-}
-setInterval(checkEspTimeout,2000);
-
-// ── SENSOR DATA ───────────────────────────────────────────
-function onData(d){
-  lastDataMs=Date.now();
-  if(!espOnline){
-    espOnline=true;
-    document.getElementById('esp-dot').className='esp-dot on';
-    document.getElementById('esp-status-txt').textContent='ONLINE';
-    document.getElementById('esp-status-txt').style.color='var(--gr)';
-    document.getElementById('ov').classList.remove('show');
-  }
-  document.getElementById('clock').textContent=d.time||'--';
-
-  sv('vT',d.temp);sv('vH',d.hum);sv('vL',d.ldr);
-  sv('vW',d.water);sv('vFP',d.feedPct);sv('vFG',d.feedG);
-  pct('brH',d.hum,'var(--bl)');
-  pct('brL',d.ldr/40.95,'var(--am)');
-  pct('brW',d.water,d.water<20?'var(--re)':'var(--gr)');
-  pct('brF',d.feedPct,d.feedPct<25?'var(--re)':'var(--am)');
-
-  const tv=parseFloat(d.temp);
-  bdg('bT',tv>30?'HOT':tv<15?'COLD':'OK',tv>30?'bre':tv<15?'bbl':'bgr');
-  bdg('bDoor',d.door?'OPEN':'CLOSED',d.door?'bgr':'bre');
-  document.getElementById('dico').textContent=d.door?'🟢':'🔴';
-  bdg('bLI',d.lightIn?'ON':'OFF',d.lightIn?'bgr':'bof');
-  bdg('bLO',d.lightOut?'ON':'OFF',d.lightOut?'bgr':'bof');
-  bdg('bFan',d.fan?'ON':'OFF',d.fan?'bam':'bof');
-  bdg('bHeat',d.heat?'ON':'OFF',d.heat?'bbl':'bof');
-  bdg('bPump',d.pump?'ON':'OFF',d.pump?'bbl':'bof');
-  bdg('bPIR',d.pir?'ALERT!':'CLEAR',d.pir?'bre':'bgr');
-  const sl=['🔕 OFF','🌙 NIGHT','🚨 ALWAYS'],sc=['bof','bam','bgr'];
-  bdg('bSec',sl[d.sec]||'--',sc[d.sec]||'bof');
-  rb('rb-li',d.lightIn);rb('rb-lo',d.lightOut);
-  rb('rb-fan',d.fan);rb('rb-heat',d.heat);rb('rb-pump',d.pump);
-  [0,1,2].forEach(i=>{const e=document.getElementById('sm'+i);if(e)e.className='smb'+(d.sec==i?' a'+i:'');});
-
-  const al=[];
-  if(d.pir)al.push('🚨 MOTION DETECTED!');
-  if(tv>30)al.push('🌡 Temp high: '+d.temp+'°C');
-  if(parseFloat(d.water)<20)al.push('💧 Water low: '+d.water+'%');
-  if(parseFloat(d.feedPct)<25)al.push('🌾 Feed low: '+d.feedPct+'%');
-  const ab=document.getElementById('alert-bar');
-  if(al.length){ab.textContent=al.join(' | ');ab.style.display='block';}
-  else ab.style.display='none';
-}
-
-// ── SETTINGS ─────────────────────────────────────────────
-function onSettings(d){
-  cfg=d;
-  const ids=['tH','tL','wA','fA','fwA','ldrO','ldrC','ldrOO',
-             'liOnH','liOnM','liOfH','liOfM','loOnH','loOnM','loOfH','loOfM',
-             'doH','doM','dcH','dcM',
-             'f1H','f1M','f1S','f2H','f2M','f2S','f3H','f3M','f3S',
-             'sR','sO','dM','tW','sec','pSec','buz','pOn','pOf','oldr'];
-  ids.forEach(k=>{const e=document.getElementById(k);if(e&&d[k]!==undefined)e.value=d[k];});
-  drawS();calcLH();
-}
-function saveS(){
-  const ids=['tH','tL','wA','fA','fwA','ldrO','ldrC','ldrOO',
-             'liOnH','liOnM','liOfH','liOfM','loOnH','loOnM','loOfH','loOfM',
-             'doH','doM','dcH','dcM',
-             'f1H','f1M','f1S','f2H','f2M','f2S','f3H','f3M','f3S',
-             'sR','sO','dM','tW','sec','pSec','buz','pOn','pOf','oldr'];
-  const p={save:true};
-  ids.forEach(k=>{const e=document.getElementById(k);if(e&&e.value!=='')p[k]=parseFloat(e.value);});
-  if(client&&client.connected){
-    client.publish(T_CMD,JSON.stringify(p));
-    document.querySelectorAll('.smsg').forEach(el=>{el.style.display='block';setTimeout(()=>el.style.display='none',2500);});
-  } else alert('Not connected to MQTT!');
-}
-
-// ── COMMANDS ─────────────────────────────────────────────
-function pub(c){
-  if(!client||!client.connected){alert('Not connected!');return;}
-  client.publish(T_CMD,JSON.stringify({cmd:c}));
-}
-
-// ── LOG ───────────────────────────────────────────────────
-function addLog(msg){
-  const lb=document.getElementById('lb');
-  if(lb.textContent==='Waiting for log messages...')lb.textContent='';
-  lb.textContent=msg+lb.textContent;
-  if(lb.textContent.length>5000)lb.textContent=lb.textContent.substring(0,5000);
-}
-
-// ── TABS ─────────────────────────────────────────────────
 const TABS=['monitor','control','lights','feed','schedule','log'];
+const NF=6, TPF=3;
+const FEEDER_PINS=[18,12,13,16,17,2];
+let cfg={};
+let lastSensorMs=0;
+
 function T(n){
   document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',TABS[i]===n));
   document.querySelectorAll('.tc').forEach(c=>c.classList.toggle('active',c.id==='tab-'+n));
 }
-
-// ── HELPERS ──────────────────────────────────────────────
-function sv(id,v){const e=document.getElementById(id);if(e)e.textContent=v;}
-function pct(id,v,col){const e=document.getElementById(id);if(e){e.style.width=Math.min(100,Math.max(0,v))+'%';if(col)e.style.background=col;}}
-function bdg(id,t,c){const e=document.getElementById(id);if(e){e.textContent=t;e.className='bdg '+c;}}
+function b(id,txt,cls){const e=document.getElementById(id);if(e){e.textContent=txt;e.className='bdg '+cls;}}
 function rb(id,on){const e=document.getElementById(id);if(e)e.classList.toggle('on',!!on);}
+function pct(id,v,col){const e=document.getElementById(id);if(e){e.style.width=Math.min(100,Math.max(0,v))+'%';if(col)e.style.background=col;}}
+function applyDeviceEnable(d){
+  const map={'rb-fan':d.enFan,'rb-heat':d.enHeat,'rb-pump':d.enPump};
+  Object.entries(map).forEach(([id,en])=>{const e=document.getElementById(id);if(e)e.classList.toggle('disabled',en===false);});
+}
+
+const client = mqtt.connect(`wss://${MQTT_HOST}:${MQTT_WSS_PORT}/mqtt`, {
+  username: MQTT_USER,
+  password: MQTT_PASS,
+  clientId: "coop_web_" + Math.random().toString(16).slice(2),
+  reconnectPeriod: 4000,
+});
+client.on('connect', () => {
+  document.getElementById('dot').className='dot on';
+  client.subscribe([T_SENSOR, T_STATUS, T_LOG, T_SETTINGS]);
+  requestSettings();
+});
+client.on('reconnect', () => { document.getElementById('dot').className='dot off'; });
+client.on('close',     () => { document.getElementById('dot').className='dot off'; });
+client.on('error',     (e) => { console.error('MQTT error', e); });
+client.on('message', (topic, payloadBuf) => {
+  const msg = payloadBuf.toString();
+  if(topic===T_SENSOR){ try{ onSensor(JSON.parse(msg)); }catch(e){} }
+  else if(topic===T_SETTINGS){ try{ onSettings(JSON.parse(msg)); }catch(e){} }
+  else if(topic===T_LOG){ appendLog(msg); }
+});
+function publishCmd(obj){ client.publish(T_CMD, JSON.stringify(obj)); }
+function cmd(c){ publishCmd({cmd:c}); }
+function requestSettings(){ publishCmd({cmd:"getsettings"}); }
+
+(function(){
+  const g=document.getElementById('feedNowGrid');
+  for(let i=0;i<NF;i++){
+    const d=document.createElement('div');
+    d.className='btn p';
+    d.textContent='🐔 Feeder '+(i+1);
+    d.onclick=()=>cmd('feednow'+i);
+    g.appendChild(d);
+  }
+  const mg=document.getElementById('mixGrid');
+  for(let i=0;i<NF;i++){
+    const d=document.createElement('div');
+    d.className='mixchk';
+    d.id='mix'+i;
+    d.textContent='F'+(i+1);
+    d.onclick=()=>d.classList.toggle('on');
+    mg.appendChild(d);
+  }
+})();
+function feedMix(){
+  const sel=[];
+  for(let i=0;i<NF;i++){ if(document.getElementById('mix'+i)?.classList.contains('on'))sel.push(i); }
+  if(!sel.length){alert('Select at least one feeder first.');return;}
+  cmd('feedgroup:'+sel.join(','));
+}
+
+function onSensor(d){
+  lastSensorMs=Date.now();
+  document.getElementById('htime').textContent=d.time||'--';
+  document.getElementById('vT').textContent=d.temp;
+  document.getElementById('vH').textContent=d.hum;
+  document.getElementById('vL').textContent=d.ldr;
+  document.getElementById('vW').textContent=d.water;
+  document.getElementById('vFP').textContent=d.feedPct;
+  pct('brH',d.hum,'#58a6ff');
+  pct('brL',d.ldr/40.95,'#e3b341');
+  pct('brW',d.water,d.water<20?'#f85149':'#3fb950');
+  pct('brF',d.feedPct,d.feedPct<25?'#f85149':'#e3b341');
+  const tv=parseFloat(d.temp);
+  b('bT',tv>30?'HOT':tv<15?'COLD':'OK',tv>30?'r':tv<15?'bl':'g');
+  b('bLI', d.lightIn ?'ON':'OFF',d.lightIn ?'g':'of');
+  b('bLO', d.lightOut?'ON':'OFF',d.lightOut?'g':'of');
+  b('bFan',d.fan     ?'ON':'OFF',d.fan     ?'am':'of');
+  b('bHeat',d.heat   ?'ON':'OFF',d.heat    ?'bl':'of');
+  b('bPump',d.pump   ?'ON':'OFF',d.pump    ?'bl':'of');
+  b('bPIR',d.pir     ?'ALERT!':'CLEAR',d.pir?'r':'g');
+  const sl=['🔕 OFF','🌙 NIGHT','🚨 ALWAYS'];
+  const sc=['of','am','g'];
+  b('bSec',sl[d.sec]||'--',sc[d.sec]||'of');
+  rb('rb-li',d.lightIn);rb('rb-lo',d.lightOut);
+  rb('rb-fan',d.fan);rb('rb-heat',d.heat);rb('rb-pump',d.pump);
+  [0,1,2].forEach(i=>{const e=document.getElementById('sm'+i);if(e){e.className='smb'+(d.sec==i?' a'+i:'');}});
+  const alerts=[];
+  if(d.pir)alerts.push('🚨 MOTION DETECTED!');
+  if(parseFloat(d.temp)>30)alerts.push('🌡 Temp high: '+d.temp+'°C');
+  if(parseFloat(d.water)<20)alerts.push('💧 Water low: '+d.water+'%');
+  if(parseFloat(d.feedPct)<25)alerts.push('🌾 Feed low: '+d.feedPct+'%');
+  const ab=document.getElementById('alert-bar');
+  if(alerts.length){ab.textContent=alerts.join('  |  ');ab.style.display='block';}
+  else ab.style.display='none';
+}
+
+function onSettings(d){
+  cfg=d;
+  const ids=['tH','tL','wA','fA','ldrII',
+             'liOnH','liOnM','liOfH','liOfM','loOnH','loOnM','loOfH','loOfM',
+             'sec','pSec','buz','pOn','pOf'];
+  ids.forEach(k=>{const e=document.getElementById(k);if(e&&d[k]!==undefined)e.value=d[k];});
+  const ildrEl=document.getElementById('ildr'); if(ildrEl&&d.ildr!==undefined)ildrEl.value=d.ildr?"1":"0";
+  ['enFan','enHeat','enPump','schLI','schLO','schFeed'].forEach(k=>{
+    const e=document.getElementById(k);if(e&&d[k]!==undefined)e.checked=!!d[k];
+  });
+  applyDeviceEnable(d);
+  buildFeederCards(d.feeders);
+  calcLH();
+}
+
+function buildFeederCards(feeders){
+  const wrap=document.getElementById('feederCards');
+  wrap.innerHTML='';
+  for(let i=0;i<NF;i++){
+    const f=(feeders&&feeders[i])||{en:true,h:[7,12,18],m:[0,0,0],sec:4,restA:90,openA:0};
+    const card=document.createElement('div');
+    card.className='fcard';
+    let slots='';
+    for(let s=0;s<TPF;s++){
+      slots+=`<div class="tslot"><div class="tslabel">Time ${s+1}</div>
+        <div class="g2"><input type="number" id="f${i}_h${s}" min="0" max="23" value="${f.h[s]}" placeholder="H">
+        <input type="number" id="f${i}_m${s}" min="0" max="59" value="${f.m[s]}" placeholder="M"></div></div>`;
+    }
+    card.innerHTML=`
+      <div class="fh"><b>🐔 Feeder ${i+1} (GPIO${FEEDER_PINS[i]})</b>
+        <label class="sw"><input type="checkbox" id="f${i}_en" ${f.en?'checked':''}><span class="slider"></span></label>
+      </div>
+      <div class="tsrow">${slots}</div>
+      <div class="frow">
+        <div class="ig"><label>Seconds</label><input type="number" id="f${i}_sec" min="0.5" max="30" step="0.5" value="${f.sec}"></div>
+        <div class="ig"><label>Rest °</label><input type="number" id="f${i}_restA" min="0" max="180" value="${f.restA}"></div>
+        <div class="ig"><label>Open °</label><input type="number" id="f${i}_openA" min="0" max="180" value="${f.openA}"></div>
+      </div>
+      <div class="frow2">
+        <div class="btn p" onclick="cmd('servotest${i}')">▶ Test servo ${i+1}</div>
+        <div class="btn" onclick="cmd('feednow${i}')">🐔 Feed now</div>
+      </div>`;
+    wrap.appendChild(card);
+  }
+}
+function readFeederCards(){
+  const arr=[];
+  for(let i=0;i<NF;i++){
+    const h=[],m=[];
+    for(let s=0;s<TPF;s++){
+      h.push(parseInt(document.getElementById(`f${i}_h${s}`)?.value||0));
+      m.push(parseInt(document.getElementById(`f${i}_m${s}`)?.value||0));
+    }
+    arr.push({
+      en: document.getElementById('f'+i+'_en')?.checked ?? true,
+      h, m,
+      sec: parseFloat(document.getElementById('f'+i+'_sec')?.value||4),
+      restA: parseInt(document.getElementById('f'+i+'_restA')?.value||90),
+      openA: parseInt(document.getElementById('f'+i+'_openA')?.value||0),
+    });
+  }
+  return arr;
+}
+
+function saveS(){
+  const ids=['tH','tL','wA','fA','ldrII',
+             'liOnH','liOnM','liOfH','liOfM','loOnH','loOnM','loOfH','loOfM',
+             'sec','pSec','buz','pOn','pOf'];
+  const p={};
+  ids.forEach(k=>{const e=document.getElementById(k);if(e&&e.value!=='')p[k]=parseFloat(e.value);});
+  const ildrEl=document.getElementById('ildr'); if(ildrEl)p.ildr=(ildrEl.value==="1");
+  ['enFan','enHeat','enPump','schLI','schLO','schFeed'].forEach(k=>{
+    const e=document.getElementById(k);if(e)p[k]=e.checked;
+  });
+  if(document.getElementById('feederCards').children.length)p.feeders=readFeederCards();
+  p.save=true;
+  publishCmd(p);
+  applyDeviceEnable(p);
+  document.querySelectorAll('.sm2').forEach(el=>{el.style.display='block';setTimeout(()=>el.style.display='none',2500);});
+}
 
 function calcLH(){
   const oH=parseInt(document.getElementById('liOnH')?.value||6);
@@ -481,33 +453,24 @@ function calcLH(){
   let m=(fH*60+fM)-(oH*60+oM);if(m<0)m+=1440;
   const h=Math.floor(m/60),mn=m%60;
   const el=document.getElementById('lhrs');
-  if(el){el.textContent='Daily: '+h+'h '+mn+'m '+(h>=14&&h<=16?'✅ optimal':'⚠ target 14-16h');
-    el.style.color=h>=14&&h<=16?'var(--gr)':'var(--am)';}
+  if(el){el.textContent='Daily light: '+h+'h '+mn+'m '+(h>=14&&h<=16?'✅ optimal':'⚠ target 14-16h');
+    el.style.color=h>=14&&h<=16?'#3fb950':'#e3b341';}
 }
 ['liOnH','liOnM','liOfH','liOfM'].forEach(id=>{
   const el=document.getElementById(id);if(el)el.addEventListener('input',calcLH);
 });
 
-function drawS(){
-  const c=document.getElementById('sc');if(!c)return;
-  const x=c.getContext('2d'),W=200,H=110,cx=100,cy=95,r=75;
-  x.clearRect(0,0,W,H);
-  x.beginPath();x.arc(cx,cy,r,-Math.PI,0);x.strokeStyle='#252a35';x.lineWidth=2;x.stroke();
-  const rA=Math.PI-(parseFloat(document.getElementById('sR')?.value||0)/180)*Math.PI;
-  const oA=Math.PI-(parseFloat(document.getElementById('sO')?.value||90)/180)*Math.PI;
-  [[rA,'#3d9bff'],[oA,'#2dba5c']].forEach(([a,col])=>{
-    x.beginPath();x.moveTo(cx,cy);x.lineTo(cx+r*Math.cos(a),cy-r*Math.sin(a));
-    x.strokeStyle=col;x.lineWidth=3;x.stroke();
-    x.beginPath();x.arc(cx+r*Math.cos(a),cy-r*Math.sin(a),5,0,2*Math.PI);
-    x.fillStyle=col;x.fill();
-  });
-  x.beginPath();x.arc(cx,cy,6,0,2*Math.PI);x.fillStyle='#4a5060';x.fill();
-  x.font='10px monospace';
-  x.fillStyle='#3d9bff';x.fillText('REST '+(document.getElementById('sR')?.value||0)+'°',4,14);
-  x.fillStyle='#2dba5c';x.fillText('OPEN '+(document.getElementById('sO')?.value||90)+'°',W-76,14);
+function appendLog(line){
+  const lb=document.getElementById('lb');
+  const div=document.createElement('div');
+  div.textContent=line;
+  lb.appendChild(div);
+  while(lb.children.length>200)lb.removeChild(lb.firstChild);
 }
-
-connect();
-drawS();
+setInterval(()=>{
+  if(lastSensorMs && Date.now()-lastSensorMs>20000){
+    document.getElementById('dot').className='dot off';
+  }
+},5000);
 </script>
 </body></html>
